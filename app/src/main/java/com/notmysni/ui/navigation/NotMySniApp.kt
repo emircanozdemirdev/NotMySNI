@@ -1,8 +1,5 @@
 package com.notmysni.ui.navigation
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -13,9 +10,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.notmysni.ui.main.MainScreen
+import com.notmysni.ui.settings.SettingsScreen
 import com.notmysni.ui.sni.SniSelectorScreen
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
@@ -72,19 +69,8 @@ fun NotMySniApp() {
                 )
             }
             composable(AppDestination.Settings.route) {
-                PlaceholderScreen(title = "Settings")
+                SettingsScreen()
             }
         }
-    }
-}
-
-@Composable
-private fun PlaceholderScreen(title: String) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(text = title)
     }
 }
