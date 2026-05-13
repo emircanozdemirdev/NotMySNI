@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.notmysni.ui.main.MainScreen
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -57,7 +58,7 @@ fun NotMySniApp() {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(AppDestination.Home.route) {
-                PlaceholderScreen(title = "Home")
+                MainScreen()
             }
             composable(AppDestination.Sni.route) {
                 PlaceholderScreen(title = "SNI Selector")
