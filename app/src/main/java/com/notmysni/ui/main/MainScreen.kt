@@ -30,10 +30,9 @@ private enum class ConnectionStatus {
 }
 
 @Composable
-fun MainScreen() {
+fun MainScreen(activeSniHost: String) {
     var vpnEnabled by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf(ConnectionStatus.Disconnected) }
-    val activeSniHost = "v.whatsapp.net"
 
     LaunchedEffect(vpnEnabled) {
         if (vpnEnabled) {
