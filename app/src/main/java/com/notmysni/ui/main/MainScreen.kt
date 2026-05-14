@@ -1,5 +1,9 @@
 package com.notmysni.ui.main
 
+import android.app.Activity
+import android.net.VpnService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -19,8 +23,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.notmysni.vpn.LocalVpnService
 import kotlinx.coroutines.delay
 
 private enum class ConnectionStatus {
@@ -31,8 +38,22 @@ private enum class ConnectionStatus {
 
 @Composable
 fun MainScreen(activeSniHost: String) {
+    val context = LocalContext.current
+
     var vpnEnabled by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf(ConnectionStatus.Disconnected) }
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            ContextCompat.startForegroundService(
+                context,
+                LocalVpnService.buildStartIntent(context)
+            )
+            vpnEnabled = true
+        }
+    }
 
     LaunchedEffect(vpnEnabled) {
         if (vpnEnabled) {
@@ -75,7 +96,23 @@ fun MainScreen(activeSniHost: String) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
-                    onClick = { vpnEnabled = !vpnEnabled },
+                    onClick = {
+                        if (vpnEnabled) {
+                            context.startService(LocalVpnService.buildStopIntent(context))
+                            vpnEnabled = false
+                        } else {
+                            val prepareIntent = VpnService.prepare(context)
+                            if (prepareIntent != null) {
+                                vpnPermissionLauncher.launch(prepareIntent)
+                            } else {
+                                ContextCompat.startForegroundService(
+                                    context,
+                                    LocalVpnService.buildStartIntent(context)
+                                )
+                                vpnEnabled = true
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(text = if (vpnEnabled) "Stop VPN" else "Start VPN")
