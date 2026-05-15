@@ -14,9 +14,18 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.notmysni.MainActivity
 import com.notmysni.R
+import com.notmysni.engine.forward.UserSpacePacketForwarder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 class LocalVpnService : VpnService() {
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var packetForwarder: UserSpacePacketForwarder? = null
     private var tunInterface: ParcelFileDescriptor? = null
 
     override fun onCreate() {
@@ -33,8 +42,8 @@ class LocalVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        tunInterface?.close()
-        tunInterface = null
+        stopPacketLoop()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -64,13 +73,32 @@ class LocalVpnService : VpnService() {
         }
 
         tunInterface = pfd
+        startPacketLoop(pfd)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(getString(R.string.vpn_notification_connected)))
     }
 
-    private fun stopVpnTunnel() {
+    private fun startPacketLoop(pfd: ParcelFileDescriptor) {
+        val forwarder = UserSpacePacketForwarder(
+            scope = serviceScope,
+            protector = VpnProtector(this),
+            mtu = VPN_MTU_BYTES
+        )
+        packetForwarder = forwarder
+        val tunInput = FileInputStream(pfd.fileDescriptor)
+        val tunOutput = FileOutputStream(pfd.fileDescriptor)
+        forwarder.start(tunInput, tunOutput)
+    }
+
+    private fun stopPacketLoop() {
+        packetForwarder?.stop()
+        packetForwarder = null
         tunInterface?.close()
         tunInterface = null
+    }
+
+    private fun stopVpnTunnel() {
+        stopPacketLoop()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
