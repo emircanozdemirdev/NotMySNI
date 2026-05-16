@@ -1,5 +1,9 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.engine.parser.IpHeaderParser
+import com.notmysni.engine.parser.TcpHeaderParser
+import com.notmysni.model.IpHeader
+import com.notmysni.model.TransportProtocol
 import com.notmysni.vpn.TunOutput
 import com.notmysni.vpn.VpnProtector
 import kotlinx.coroutines.CoroutineScope
@@ -57,34 +61,38 @@ class UserSpacePacketForwarder(
     }
 
     private fun handlePacket(packet: ByteArray, length: Int, tunOut: TunOutput) {
-        if (Ipv4Packet.version(packet, length) != 4) return
-        when (Ipv4Packet.protocol(packet, length)) {
-            Ipv4Packet.PROTOCOL_TCP -> handleTcp(packet, length, tunOut)
-            Ipv4Packet.PROTOCOL_UDP -> handleUdp(packet, length, tunOut)
+        val ipHeader = IpHeaderParser.parse(packet, length) ?: return
+        when (ipHeader.protocol) {
+            TransportProtocol.TCP -> handleTcp(packet, length, ipHeader, tunOut)
+            TransportProtocol.UDP -> handleUdp(packet, length, ipHeader, tunOut)
         }
     }
 
-    private fun handleTcp(packet: ByteArray, length: Int, tunOut: TunOutput) {
-        val srcIp = Ipv4Packet.sourceAddress(packet, length) ?: return
-        val dstIp = Ipv4Packet.destinationAddress(packet, length) ?: return
-        val srcPort = Ipv4Packet.sourcePort(packet, length)
-        val dstPort = Ipv4Packet.destinationPort(packet, length)
-        if (srcPort < 0 || dstPort < 0) return
+    private fun handleTcp(
+        packet: ByteArray,
+        length: Int,
+        ipHeader: IpHeader,
+        tunOut: TunOutput
+    ) {
+        val tcpHeader = TcpHeaderParser.parse(packet, length, ipHeader.headerLength) ?: return
 
-        val key = ConnectionKey(srcIp, srcPort, dstIp, dstPort)
-        val flags = Ipv4Packet.tcpFlags(packet, length)
-        val isSyn = (flags and 0x02) != 0
-        val isFin = (flags and 0x01) != 0
-        val isRst = (flags and 0x04) != 0
+        val srcIp = ipHeader.sourceAddress.bytes
+        val dstIp = ipHeader.destinationAddress.bytes
+        val key = ConnectionKey(
+            srcIp,
+            tcpHeader.sourcePort,
+            dstIp,
+            tcpHeader.destinationPort
+        )
 
-        if (isFin || isRst) {
+        if (tcpHeader.flags.fin || tcpHeader.flags.rst) {
             tcpConnections.remove(key)?.close()
             return
         }
 
         var session = tcpConnections[key]
         if (session == null) {
-            if (!isSyn) return
+            if (!tcpHeader.flags.syn) return
             session = TcpSession(
                 scope = scope,
                 protector = protector,
@@ -94,31 +102,35 @@ class UserSpacePacketForwarder(
             ).also { newSession ->
                 tcpConnections[key] = newSession
                 newSession.connect(
-                    Ipv4Packet.addressToString(dstIp),
-                    dstPort
+                    ipHeader.destinationAddress.toDisplayString(),
+                    tcpHeader.destinationPort
                 )
             }
         }
 
-        val payloadOffset = Ipv4Packet.tcpPayloadOffset(packet, length)
-        if (payloadOffset < 0 || payloadOffset >= length) return
-        val payloadLength = length - payloadOffset
+        val payloadLength = tcpHeader.payloadLength(length)
         if (payloadLength > 0) {
-            session.sendToRemote(packet, payloadOffset, payloadLength)
+            session.sendToRemote(packet, tcpHeader.payloadOffset, payloadLength)
         }
     }
 
-    private fun handleUdp(packet: ByteArray, length: Int, tunOut: TunOutput) {
-        val srcIp = Ipv4Packet.sourceAddress(packet, length) ?: return
-        val dstIp = Ipv4Packet.destinationAddress(packet, length) ?: return
-        val srcPort = Ipv4Packet.sourcePort(packet, length)
-        val dstPort = Ipv4Packet.destinationPort(packet, length)
-        if (srcPort < 0 || dstPort < 0) return
+    private fun handleUdp(
+        packet: ByteArray,
+        length: Int,
+        ipHeader: IpHeader,
+        tunOut: TunOutput
+    ) {
+        val udpHeaderLength = 8
+        val payloadOffset = ipHeader.headerLength + udpHeaderLength
+        if (payloadOffset >= length) return
 
-        val payloadOffset = Ipv4Packet.udpPayloadOffset(packet, length)
-        if (payloadOffset < 0 || payloadOffset >= length) return
         val payloadLength = length - payloadOffset
         if (payloadLength <= 0) return
+
+        val srcIp = ipHeader.sourceAddress.bytes
+        val dstIp = ipHeader.destinationAddress.bytes
+        val srcPort = readUInt16(packet, ipHeader.headerLength)
+        val dstPort = readUInt16(packet, ipHeader.headerLength + 2)
 
         val key = ConnectionKey(srcIp, srcPort, dstIp, dstPort)
         scope.launch(Dispatchers.IO) {
@@ -130,7 +142,7 @@ class UserSpacePacketForwarder(
                     }
                 }
                 val dstAddress = InetSocketAddress(
-                    Ipv4Packet.addressToString(dstIp),
+                    ipHeader.destinationAddress.toDisplayString(),
                     dstPort
                 )
                 val sendBuffer = ByteBuffer.wrap(packet, payloadOffset, payloadLength)
@@ -157,6 +169,9 @@ class UserSpacePacketForwarder(
         }
     }
 
+    private fun readUInt16(packet: ByteArray, offset: Int): Int =
+        ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
+
     private class TcpSession(
         private val scope: CoroutineScope,
         private val protector: VpnProtector,
@@ -181,7 +196,7 @@ class UserSpacePacketForwarder(
                         while (isActive) {
                             val read = socket.read(buffer)
                             if (read <= 0) break
-                            val packet = TcpResponseBuilder.build(
+                            val responsePacket = TcpResponseBuilder.build(
                                 sourceIp = key.destinationIp,
                                 sourcePort = key.destinationPort,
                                 destinationIp = key.sourceIp,
@@ -189,7 +204,7 @@ class UserSpacePacketForwarder(
                                 payload = buffer,
                                 payloadLength = read
                             )
-                            tunOut.write(packet, packet.size)
+                            tunOut.write(responsePacket, responsePacket.size)
                         }
                     }
                 } catch (_: Exception) {

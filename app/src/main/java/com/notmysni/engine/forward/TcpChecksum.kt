@@ -1,5 +1,7 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.model.TransportProtocol
+
 internal object TcpChecksum {
 
     fun apply(packet: ByteArray, totalLength: Int, tcpOffset: Int, tcpLength: Int) {
@@ -11,7 +13,7 @@ internal object TcpChecksum {
         sum += ((packet[14].toInt() and 0xFF) shl 8) or (packet[15].toInt() and 0xFF)
         sum += ((packet[16].toInt() and 0xFF) shl 8) or (packet[17].toInt() and 0xFF)
         sum += ((packet[18].toInt() and 0xFF) shl 8) or (packet[19].toInt() and 0xFF)
-        sum += Ipv4Packet.PROTOCOL_TCP
+        sum += TransportProtocol.TCP
         sum += tcpLength
 
         var i = tcpOffset

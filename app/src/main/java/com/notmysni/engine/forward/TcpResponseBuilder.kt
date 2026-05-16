@@ -1,5 +1,7 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.model.TransportProtocol
+
 internal object TcpResponseBuilder {
 
     fun build(
@@ -24,7 +26,7 @@ internal object TcpResponseBuilder {
         packet[6] = 0x40
         packet[7] = 0x00
         packet[8] = 64
-        packet[9] = Ipv4Packet.PROTOCOL_TCP.toByte()
+        packet[9] = TransportProtocol.TCP.toByte()
         System.arraycopy(sourceIp, 0, packet, 12, 4)
         System.arraycopy(destinationIp, 0, packet, 16, 4)
 
