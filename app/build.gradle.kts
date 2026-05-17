@@ -75,4 +75,6 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 }
