@@ -15,6 +15,7 @@ object TlsClientHelloParser {
         val end = offset + length
 
         if ((buffer[pos].toInt() and 0xFF) != TlsConstants.CONTENT_TYPE_HANDSHAKE) return null
+        val recordLengthOffset = pos + 3
         pos += 1
 
         pos += 2 // record layer version (legacy)
@@ -24,6 +25,7 @@ object TlsClientHelloParser {
         if (recordLength <= 0 || pos + recordLength > end) return null
 
         if ((buffer[pos].toInt() and 0xFF) != TlsConstants.HANDSHAKE_CLIENT_HELLO) return null
+        val handshakeLengthOffset = pos + 1
         pos += 1
 
         val handshakeLength = readUInt24(buffer, pos)
@@ -53,6 +55,7 @@ object TlsClientHelloParser {
         pos += compressionMethodsLength
 
         if (pos + 2 > handshakeEnd) return null
+        val extensionsLengthOffset = pos
         val extensionsLength = readUInt16(buffer, pos)
         pos += 2
         val extensionsEnd = pos + extensionsLength
@@ -61,6 +64,8 @@ object TlsClientHelloParser {
         var sniHostname: String? = null
         var sniHostnameOffset = -1
         var sniHostnameLength = 0
+        var sniListLengthOffset = -1
+        var sniNameLengthOffset = -1
 
         while (pos + 4 <= extensionsEnd) {
             val extensionType = readUInt16(buffer, pos)
@@ -74,6 +79,8 @@ object TlsClientHelloParser {
                     sniHostname = sni.hostname
                     sniHostnameOffset = sni.hostnameOffset
                     sniHostnameLength = sni.hostnameLength
+                    sniListLengthOffset = sni.listLengthOffset
+                    sniNameLengthOffset = sni.nameLengthOffset
                 }
             }
             pos += extensionLength
@@ -82,14 +89,21 @@ object TlsClientHelloParser {
         return TlsClientHello(
             serverName = sniHostname,
             hostnameOffset = sniHostnameOffset,
-            hostnameLength = sniHostnameLength
+            hostnameLength = sniHostnameLength,
+            recordLengthOffset = recordLengthOffset,
+            handshakeLengthOffset = handshakeLengthOffset,
+            extensionsLengthOffset = extensionsLengthOffset,
+            sniListLengthOffset = sniListLengthOffset,
+            sniNameLengthOffset = sniNameLengthOffset
         )
     }
 
     private data class ServerNameInfo(
         val hostname: String,
         val hostnameOffset: Int,
-        val hostnameLength: Int
+        val hostnameLength: Int,
+        val listLengthOffset: Int,
+        val nameLengthOffset: Int
     )
 
     private fun parseServerNameExtension(
@@ -101,6 +115,7 @@ object TlsClientHelloParser {
         val extensionEnd = offset + extensionLength
         var pos = offset
 
+        val listLengthOffset = pos
         val listLength = readUInt16(buffer, pos)
         pos += 2
         val listEnd = pos + listLength
@@ -108,6 +123,7 @@ object TlsClientHelloParser {
 
         while (pos + 3 <= listEnd) {
             val nameType = buffer[pos].toInt() and 0xFF
+            val nameLengthOffset = pos + 1
             val nameLength = readUInt16(buffer, pos + 1)
             pos += 3
             if (pos + nameLength > listEnd) return null
@@ -117,7 +133,9 @@ object TlsClientHelloParser {
                 return ServerNameInfo(
                     hostname = hostname,
                     hostnameOffset = pos,
-                    hostnameLength = nameLength
+                    hostnameLength = nameLength,
+                    listLengthOffset = listLengthOffset,
+                    nameLengthOffset = nameLengthOffset
                 )
             }
             pos += nameLength
