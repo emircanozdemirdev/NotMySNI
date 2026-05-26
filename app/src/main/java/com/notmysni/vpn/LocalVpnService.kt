@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.notmysni.MainActivity
 import com.notmysni.R
+import com.notmysni.engine.EngineSettingsHolder
 import com.notmysni.engine.forward.UserSpacePacketForwarder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,8 @@ class LocalVpnService : VpnService() {
         val forwarder = UserSpacePacketForwarder(
             scope = serviceScope,
             protector = VpnProtector(this),
-            mtu = VPN_MTU_BYTES
+            mtu = VPN_MTU_BYTES,
+            dpiEngineConfig = EngineSettingsHolder.config
         )
         packetForwarder = forwarder
         val tunInput = FileInputStream(pfd.fileDescriptor)

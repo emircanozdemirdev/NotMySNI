@@ -1,5 +1,7 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.engine.DpiEngineConfig
+import com.notmysni.engine.fragment.TcpDesyncPipeline
 import com.notmysni.engine.parser.IpHeaderParser
 import com.notmysni.engine.parser.TcpHeaderParser
 import com.notmysni.model.IpHeader
@@ -22,12 +24,23 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Reads IPv4 packets from TUN, forwards TCP/UDP via protected sockets, writes replies to TUN.
  * Full routing and DPI logic will extend this in later phases.
+ *
+ * Step 6.2 — TTL-based desync technique
  */
 class UserSpacePacketForwarder(
     private val scope: CoroutineScope,
     private val protector: VpnProtector,
-    private val mtu: Int
+    private val mtu: Int,
+    private val dpiEngineConfig: DpiEngineConfig = DpiEngineConfig.Default
 ) {
+    // Step 6.2 — TTL-based desync technique
+    //
+    // private fun sendWholePacketWithLowTtl(packet: ByteArray, length: Int, tunOut: TunOutput) {
+    //     val copy = packet.copyOf(length)
+    //     copy[8] = 1
+    //     tunOut.write(copy, length)
+    // }
+
     private val tcpConnections = ConcurrentHashMap<ConnectionKey, TcpSession>()
     private val udpChannels = ConcurrentHashMap<ConnectionKey, DatagramChannel>()
 
@@ -110,7 +123,7 @@ class UserSpacePacketForwarder(
 
         val payloadLength = tcpHeader.payloadLength(length)
         if (payloadLength > 0) {
-            session.sendToRemote(packet, tcpHeader.payloadOffset, payloadLength)
+            session.sendToRemote(packet, length)
         }
     }
 
@@ -172,7 +185,7 @@ class UserSpacePacketForwarder(
     private fun readUInt16(packet: ByteArray, offset: Int): Int =
         ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
 
-    private class TcpSession(
+    private inner class TcpSession(
         private val scope: CoroutineScope,
         private val protector: VpnProtector,
         private val key: ConnectionKey,
@@ -213,10 +226,29 @@ class UserSpacePacketForwarder(
             }
         }
 
-        fun sendToRemote(packet: ByteArray, offset: Int, length: Int) {
+        fun sendToRemote(packet: ByteArray, length: Int) {
             scope.launch(Dispatchers.IO) {
                 try {
-                    channel?.write(ByteBuffer.wrap(packet, offset, length))
+                    val socketChannel = channel ?: return@launch
+                    val segments = TcpDesyncPipeline.prepareOutbound(
+                        packet = packet,
+                        length = length,
+                        fragmentStrategy = dpiEngineConfig.fragmentStrategy,
+                        ttlConfig = dpiEngineConfig.ttlDesync
+                    ) ?: return@launch
+
+                    val socket = socketChannel.socket()
+                    val ttlConfig = dpiEngineConfig.ttlDesync
+
+                    segments.decoyPayload?.let { decoy ->
+                        IpTtl.setSocketTtl(socket, ttlConfig.fakeSegmentTtl)
+                        socketChannel.write(ByteBuffer.wrap(decoy))
+                    }
+
+                    IpTtl.setSocketTtl(socket, ttlConfig.realSegmentTtl)
+                    for (payload in segments.payloadsForRemote) {
+                        socketChannel.write(ByteBuffer.wrap(payload))
+                    }
                 } catch (_: Exception) {
                     close()
                 }

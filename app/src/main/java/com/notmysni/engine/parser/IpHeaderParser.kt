@@ -15,6 +15,7 @@ object IpHeaderParser {
         if (headerLength < 20 || length < headerLength) return null
 
         val totalLength = readUInt16(packet, 2)
+        val ttl = packet[8].toInt() and 0xFF
         val protocol = packet[9].toInt() and 0xFF
         val sourceAddress = IpAddress(packet.copyOfRange(12, 16))
         val destinationAddress = IpAddress(packet.copyOfRange(16, 20))
@@ -25,9 +26,14 @@ object IpHeaderParser {
             totalLength = totalLength,
             protocol = protocol,
             sourceAddress = sourceAddress,
-            destinationAddress = destinationAddress
+            destinationAddress = destinationAddress,
+            ttl = ttl
         )
     }
+
+    // Step 6.2 — TTL-based desync technique
+    //
+    // fun parseTtlOnly(packet: ByteArray): Int = packet[8].toInt() and 0xFF
 
     private fun readUInt16(packet: ByteArray, offset: Int): Int =
         ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)

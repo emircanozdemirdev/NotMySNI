@@ -13,6 +13,15 @@ import com.notmysni.model.TransportProtocol
  */
 object TcpFragmenter {
 
+    // Step 6.2 — TTL-based desync technique
+    //
+    // private fun buildFragmentPacketWithLowTtl(...): ByteArray {
+    //     val packet = buildFragmentPacket(...)
+    //     packet[8] = 1
+    //     IpChecksum.apply(packet, packet.size)
+    //     return packet
+    // }
+
     data class TcpFragment(
         val packet: ByteArray,
         val sequenceNumber: Long,

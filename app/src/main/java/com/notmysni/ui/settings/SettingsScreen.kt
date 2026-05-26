@@ -22,11 +22,16 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.notmysni.engine.DpiEngineConfig
+import com.notmysni.engine.EngineSettingsHolder
+import com.notmysni.engine.fragment.FragmentStrategy
+import com.notmysni.engine.fragment.TtlDesyncConfig
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -54,6 +59,17 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         FragmentStrategyOption.entries[fragmentStrategyIndex.coerceIn(0, FragmentStrategyOption.entries.lastIndex)]
 
     var verboseLogsEnabled by rememberSaveable { mutableStateOf(false) }
+
+    var ttlDesyncEnabled by rememberSaveable {
+        mutableStateOf(EngineSettingsHolder.config.ttlDesync.enabled)
+    }
+
+    LaunchedEffect(fragmentStrategyIndex, ttlDesyncEnabled) {
+        EngineSettingsHolder.config = DpiEngineConfig(
+            fragmentStrategy = fragmentStrategy.toEngineStrategy(),
+            ttlDesync = TtlDesyncConfig(enabled = ttlDesyncEnabled)
+        )
+    }
 
     Column(
         modifier = modifier
@@ -139,6 +155,38 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         HorizontalDivider()
         Spacer(modifier = Modifier.height(24.dp))
 
+        Text(
+            text = "TTL desync",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "TTL-based desync",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Low-TTL decoy on the first fragment, then real segments",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = ttlDesyncEnabled,
+                onCheckedChange = { ttlDesyncEnabled = it }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(24.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -162,4 +210,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+private fun FragmentStrategyOption.toEngineStrategy(): FragmentStrategy = when (this) {
+    FragmentStrategyOption.SPLIT_AT_SNI -> FragmentStrategy.SplitAtSni
+    FragmentStrategyOption.TINY_FIRST -> FragmentStrategy.TinyFirst()
+    FragmentStrategyOption.MULTI_SPLIT -> FragmentStrategy.MultiSplit(chunkCount = 4)
 }

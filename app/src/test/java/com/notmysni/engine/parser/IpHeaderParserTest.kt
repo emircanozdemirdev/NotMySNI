@@ -29,6 +29,7 @@ class IpHeaderParserTest {
         assertEquals(TransportProtocol.TCP, header.protocol)
         assertEquals("10.0.0.2", header.sourceAddress.toDisplayString())
         assertEquals("93.184.216.34", header.destinationAddress.toDisplayString())
+        assertEquals(64, header.ttl)
     }
 
     @Test

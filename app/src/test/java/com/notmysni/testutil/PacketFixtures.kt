@@ -1,5 +1,7 @@
 package com.notmysni.testutil
 
+import com.notmysni.engine.forward.IpChecksum
+import com.notmysni.engine.forward.TcpChecksum
 import com.notmysni.model.TransportProtocol
 
 /**
@@ -103,6 +105,10 @@ object PacketFixtures {
         packet[tcpOffset + 13] = 0x18
 
         tcpPayload.copyInto(packet, ipHeaderLength + tcpHeaderLength)
+
+        val tcpLength = tcpHeaderLength + tcpPayload.size
+        IpChecksum.apply(packet, totalLength)
+        TcpChecksum.apply(packet, totalLength, ipHeaderLength, tcpLength)
         return packet
     }
 
