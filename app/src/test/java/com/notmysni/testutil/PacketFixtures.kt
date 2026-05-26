@@ -78,7 +78,9 @@ object PacketFixtures {
         destinationIp: ByteArray,
         sourcePort: Int,
         destinationPort: Int,
-        tcpPayload: ByteArray
+        tcpPayload: ByteArray,
+        sequenceNumber: Long = 0L,
+        acknowledgmentNumber: Long = 0L
     ): ByteArray {
         val ipHeaderLength = 20
         val tcpHeaderLength = 20
@@ -95,6 +97,8 @@ object PacketFixtures {
         val tcpOffset = ipHeaderLength
         writeUInt16(packet, tcpOffset, sourcePort)
         writeUInt16(packet, tcpOffset + 2, destinationPort)
+        writeUInt32(packet, tcpOffset + 4, sequenceNumber)
+        writeUInt32(packet, tcpOffset + 8, acknowledgmentNumber)
         packet[tcpOffset + 12] = 0x50
         packet[tcpOffset + 13] = 0x18
 
@@ -114,5 +118,12 @@ object PacketFixtures {
         buffer[offset] = ((value shr 16) and 0xFF).toByte()
         buffer[offset + 1] = ((value shr 8) and 0xFF).toByte()
         buffer[offset + 2] = (value and 0xFF).toByte()
+    }
+
+    private fun writeUInt32(buffer: ByteArray, offset: Int, value: Long) {
+        buffer[offset] = ((value shr 24) and 0xFF).toByte()
+        buffer[offset + 1] = ((value shr 16) and 0xFF).toByte()
+        buffer[offset + 2] = ((value shr 8) and 0xFF).toByte()
+        buffer[offset + 3] = (value and 0xFF).toByte()
     }
 }
