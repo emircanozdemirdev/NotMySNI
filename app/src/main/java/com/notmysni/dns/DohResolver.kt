@@ -7,6 +7,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.InetAddress
+import java.net.Socket
+import javax.net.SocketFactory
 
 /**
  * Step 7.1 — DNS-over-HTTPS resolver
@@ -18,8 +21,15 @@ class DohResolver(
     private val httpClient: OkHttpClient = OkHttpClient(),
     provider: DohProvider = DohProvider.CLOUDFLARE,
     private val endpointUrl: String = provider.endpointUrl,
+    socketProtector: ((Socket) -> Boolean)? = null,
     private val cache: DnsLruCache = DnsLruCache()
 ) {
+    private val protectedClient: OkHttpClient = socketProtector?.let { protector ->
+        httpClient.newBuilder()
+            .socketFactory(ProtectingSocketFactory(SocketFactory.getDefault(), protector))
+            .build()
+    } ?: httpClient
+
 
     suspend fun resolve(hostname: String): Result<List<IpAddress>> = withContext(Dispatchers.IO) {
         val normalized = normalizeHostname(hostname)
@@ -39,7 +49,7 @@ class DohResolver(
                 .header("Accept", DNS_MESSAGE_MEDIA_TYPE.toString())
                 .build()
 
-            httpClient.newCall(request).execute().use { response ->
+            protectedClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw DohException("DoH request failed with HTTP ${response.code}")
                 }
@@ -67,5 +77,38 @@ class DohResolver(
 
     companion object {
         private val DNS_MESSAGE_MEDIA_TYPE = "application/dns-message".toMediaType()
+    }
+}
+
+private class ProtectingSocketFactory(
+    private val delegate: SocketFactory,
+    private val protector: (Socket) -> Boolean
+) : SocketFactory() {
+
+    override fun createSocket(): Socket = protect(delegate.createSocket())
+
+    override fun createSocket(host: String?, port: Int): Socket =
+        protect(delegate.createSocket(host, port))
+
+    override fun createSocket(
+        host: String?,
+        port: Int,
+        localHost: InetAddress?,
+        localPort: Int
+    ): Socket = protect(delegate.createSocket(host, port, localHost, localPort))
+
+    override fun createSocket(host: InetAddress?, port: Int): Socket =
+        protect(delegate.createSocket(host, port))
+
+    override fun createSocket(
+        address: InetAddress?,
+        port: Int,
+        localAddress: InetAddress?,
+        localPort: Int
+    ): Socket = protect(delegate.createSocket(address, port, localAddress, localPort))
+
+    private fun protect(socket: Socket): Socket {
+        protector(socket)
+        return socket
     }
 }

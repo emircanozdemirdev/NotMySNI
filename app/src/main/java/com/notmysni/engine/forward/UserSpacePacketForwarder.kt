@@ -1,5 +1,6 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.dns.DohResolver
 import com.notmysni.engine.DpiEngineConfig
 import com.notmysni.engine.fragment.TcpDesyncPipeline
 import com.notmysni.engine.parser.IpHeaderParser
@@ -31,7 +32,8 @@ class UserSpacePacketForwarder(
     private val scope: CoroutineScope,
     private val protector: VpnProtector,
     private val mtu: Int,
-    private val dpiEngineConfig: DpiEngineConfig = DpiEngineConfig.Default
+    private val dpiEngineConfig: DpiEngineConfig = DpiEngineConfig.Default,
+    @Suppress("unused") private val dohResolver: DohResolver? = null
 ) {
     // Step 6.2 — TTL-based desync technique
     //

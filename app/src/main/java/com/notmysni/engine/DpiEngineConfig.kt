@@ -1,5 +1,6 @@
 package com.notmysni.engine
 
+import com.notmysni.dns.DohProvider
 import com.notmysni.engine.fragment.FragmentStrategy
 import com.notmysni.engine.fragment.TtlDesyncConfig
 
@@ -8,6 +9,7 @@ import com.notmysni.engine.fragment.TtlDesyncConfig
  * Step 6.2 — TTL-based desync technique
  */
 data class DpiEngineConfig(
+    val dohProvider: DohProvider = DohProvider.CLOUDFLARE,
     val fragmentStrategy: FragmentStrategy = FragmentStrategy.SplitAtSni,
     val ttlDesync: TtlDesyncConfig = TtlDesyncConfig(enabled = true)
 ) {

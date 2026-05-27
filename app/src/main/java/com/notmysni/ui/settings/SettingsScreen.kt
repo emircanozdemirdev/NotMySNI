@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.notmysni.dns.DohProvider
 import com.notmysni.engine.DpiEngineConfig
 import com.notmysni.engine.EngineSettingsHolder
 import com.notmysni.engine.fragment.FragmentStrategy
@@ -35,11 +36,6 @@ import com.notmysni.engine.fragment.TtlDesyncConfig
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-
-private enum class DohProvider(val label: String) {
-    CLOUDFLARE("Cloudflare"),
-    GOOGLE("Google")
-}
 
 private enum class FragmentStrategyOption(val label: String) {
     SPLIT_AT_SNI("Split at SNI"),
@@ -50,7 +46,9 @@ private enum class FragmentStrategyOption(val label: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
-    var dohProviderIndex by rememberSaveable { mutableStateOf(0) }
+    var dohProviderIndex by rememberSaveable {
+        mutableStateOf(EngineSettingsHolder.config.dohProvider.ordinal)
+    }
     val dohProvider = DohProvider.entries[dohProviderIndex.coerceIn(0, DohProvider.entries.lastIndex)]
     var dohMenuExpanded by remember { mutableStateOf(false) }
 
@@ -64,8 +62,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         mutableStateOf(EngineSettingsHolder.config.ttlDesync.enabled)
     }
 
-    LaunchedEffect(fragmentStrategyIndex, ttlDesyncEnabled) {
+    LaunchedEffect(dohProviderIndex, fragmentStrategyIndex, ttlDesyncEnabled) {
         EngineSettingsHolder.config = DpiEngineConfig(
+            dohProvider = dohProvider,
             fragmentStrategy = fragmentStrategy.toEngineStrategy(),
             ttlDesync = TtlDesyncConfig(enabled = ttlDesyncEnabled)
         )
@@ -99,7 +98,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     .fillMaxWidth()
                     .menuAnchor(),
                 readOnly = true,
-                value = dohProvider.label,
+                value = dohProvider.toLabel(),
                 onValueChange = {},
                 label = { Text("DoH provider") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dohMenuExpanded) },
@@ -111,7 +110,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             ) {
                 DohProvider.entries.forEach { provider ->
                     DropdownMenuItem(
-                        text = { Text(provider.label) },
+                        text = { Text(provider.toLabel()) },
                         onClick = {
                             dohProviderIndex = provider.ordinal
                             dohMenuExpanded = false
@@ -216,4 +215,9 @@ private fun FragmentStrategyOption.toEngineStrategy(): FragmentStrategy = when (
     FragmentStrategyOption.SPLIT_AT_SNI -> FragmentStrategy.SplitAtSni
     FragmentStrategyOption.TINY_FIRST -> FragmentStrategy.TinyFirst()
     FragmentStrategyOption.MULTI_SPLIT -> FragmentStrategy.MultiSplit(chunkCount = 4)
+}
+
+private fun DohProvider.toLabel(): String = when (this) {
+    DohProvider.CLOUDFLARE -> "Cloudflare"
+    DohProvider.GOOGLE -> "Google"
 }

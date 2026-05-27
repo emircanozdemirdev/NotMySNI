@@ -7,9 +7,12 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.Socket
+import java.util.concurrent.atomic.AtomicReference
 
 /** Step 7.1 — DNS-over-HTTPS resolver */
 class DohResolverTest {
@@ -99,6 +102,36 @@ class DohResolverTest {
 
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull() is DohException)
+    }
+
+    @Test
+    fun resolve_withSocketProtector_invokesProtector() = runTest {
+        val dnsResponse = buildARecordResponse(
+            hostname = "protect.test",
+            ttl = 300,
+            ip = byteArrayOf(1, 1, 1, 1)
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/dns-message")
+                .setBody(okio.Buffer().write(dnsResponse))
+        )
+
+        val protectedSocket = AtomicReference<Socket?>(null)
+        val resolver = DohResolver(
+            httpClient = OkHttpClient(),
+            endpointUrl = server.url("/dns-query").toString(),
+            socketProtector = { socket ->
+                protectedSocket.set(socket)
+                true
+            }
+        )
+
+        val result = resolver.resolve("protect.test")
+
+        assertTrue(result.isSuccess)
+        assertNotNull(protectedSocket.get())
     }
 
     private fun buildARecordResponse(

@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.notmysni.MainActivity
 import com.notmysni.R
+import com.notmysni.dns.DohResolver
 import com.notmysni.engine.EngineSettingsHolder
 import com.notmysni.engine.forward.UserSpacePacketForwarder
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,7 @@ class LocalVpnService : VpnService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var packetForwarder: UserSpacePacketForwarder? = null
+    private var dohResolver: DohResolver? = null
     private var tunInterface: ParcelFileDescriptor? = null
 
     override fun onCreate() {
@@ -80,11 +82,18 @@ class LocalVpnService : VpnService() {
     }
 
     private fun startPacketLoop(pfd: ParcelFileDescriptor) {
+        val protector = VpnProtector(this)
+        val config = EngineSettingsHolder.config
+        dohResolver = DohResolver(
+            provider = config.dohProvider,
+            socketProtector = protector::protect
+        )
         val forwarder = UserSpacePacketForwarder(
             scope = serviceScope,
-            protector = VpnProtector(this),
+            protector = protector,
             mtu = VPN_MTU_BYTES,
-            dpiEngineConfig = EngineSettingsHolder.config
+            dpiEngineConfig = config,
+            dohResolver = dohResolver
         )
         packetForwarder = forwarder
         val tunInput = FileInputStream(pfd.fileDescriptor)
@@ -95,6 +104,8 @@ class LocalVpnService : VpnService() {
     private fun stopPacketLoop() {
         packetForwarder?.stop()
         packetForwarder = null
+        dohResolver?.clearCache()
+        dohResolver = null
         tunInterface?.close()
         tunInterface = null
     }
