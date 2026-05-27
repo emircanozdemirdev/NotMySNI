@@ -62,8 +62,8 @@ class DnsWireFormatTest {
         val answers = DnsWireFormat.parseARecords(response)
 
         assertEquals(2, answers.size)
-        assertArrayEquals(byteArrayOf(192, 168, 0, 1), answers[0].ip)
-        assertArrayEquals(byteArrayOf(192, 168, 0, 2), answers[1].ip)
+        assertArrayEquals(byteArrayOf(192.toByte(), 168.toByte(), 0, 1), answers[0].ip)
+        assertArrayEquals(byteArrayOf(192.toByte(), 168.toByte(), 0, 2), answers[1].ip)
         assertTrue(answers.all { it.ttl == 60 })
     }
 
