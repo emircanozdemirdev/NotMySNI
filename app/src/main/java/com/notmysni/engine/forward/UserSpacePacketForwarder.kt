@@ -43,7 +43,8 @@ class UserSpacePacketForwarder(
     //     tunOut.write(copy, length)
     // }
 
-    private val tcpConnections = ConcurrentHashMap<ConnectionKey, TcpSession>()
+    private val connectionTable = ConnectionTable()
+    private val tcpSessions = ConcurrentHashMap<ConnectionKey, TcpSession>()
     private val udpChannels = ConcurrentHashMap<ConnectionKey, DatagramChannel>()
 
     private var readJob: Job? = null
@@ -67,8 +68,12 @@ class UserSpacePacketForwarder(
     fun stop() {
         readJob?.cancel()
         readJob = null
-        tcpConnections.values.forEach { it.close() }
-        tcpConnections.clear()
+        tcpSessions.values.forEach { it.close() }
+        tcpSessions.clear()
+        connectionTable.values().forEach { conn ->
+            runCatching { conn.channel.close() }
+        }
+        connectionTable.clear()
         udpChannels.values.forEach { channel ->
             runCatching { channel.close() }
         }
@@ -101,25 +106,27 @@ class UserSpacePacketForwarder(
         )
 
         if (tcpHeader.flags.fin || tcpHeader.flags.rst) {
-            tcpConnections.remove(key)?.close()
+            tcpSessions.remove(key)?.close()
+            connectionTable.remove(key)?.let { runCatching { it.channel.close() } }
             return
         }
 
-        var session = tcpConnections[key]
+        var session = tcpSessions[key]
         if (session == null) {
             if (!tcpHeader.flags.syn) return
+            val destinationHost = ipHeader.destinationAddress.toDisplayString()
+            val connection = createConnection(key, destinationHost, tcpHeader.destinationPort) ?: return
             session = TcpSession(
                 scope = scope,
-                protector = protector,
-                key = key,
+                connection = connection,
                 tunOut = tunOut,
-                onClosed = { tcpConnections.remove(key) }
+                onClosed = {
+                    tcpSessions.remove(key)
+                    connectionTable.remove(key)?.let { runCatching { it.channel.close() } }
+                }
             ).also { newSession ->
-                tcpConnections[key] = newSession
-                newSession.connect(
-                    ipHeader.destinationAddress.toDisplayString(),
-                    tcpHeader.destinationPort
-                )
+                tcpSessions[key] = newSession
+                newSession.startRemoteToTun()
             }
         }
 
@@ -187,24 +194,47 @@ class UserSpacePacketForwarder(
     private fun readUInt16(packet: ByteArray, offset: Int): Int =
         ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
 
+    private fun createConnection(
+        key: ConnectionKey,
+        destinationHost: String,
+        destinationPort: Int
+    ): TcpConnection? {
+        return try {
+            val channel = SocketChannel.open()
+            protector.protect(channel)
+            channel.configureBlocking(true)
+            channel.connect(InetSocketAddress(destinationHost, destinationPort))
+
+            val newConnection = TcpConnection(
+                key = key,
+                destinationHost = destinationHost,
+                destinationPort = destinationPort,
+                channel = channel
+            )
+            val existing = connectionTable.putIfAbsent(newConnection)
+            if (existing != null) {
+                runCatching { channel.close() }
+                existing
+            } else {
+                newConnection
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private inner class TcpSession(
         private val scope: CoroutineScope,
-        private val protector: VpnProtector,
-        private val key: ConnectionKey,
+        private val connection: TcpConnection,
         private val tunOut: TunOutput,
         private val onClosed: () -> Unit
     ) {
-        private var channel: SocketChannel? = null
         private var remoteToTunJob: Job? = null
 
-        fun connect(host: String, port: Int) {
+        fun startRemoteToTun() {
             scope.launch(Dispatchers.IO) {
                 try {
-                    val socketChannel = SocketChannel.open()
-                    protector.protect(socketChannel)
-                    socketChannel.configureBlocking(true)
-                    socketChannel.connect(InetSocketAddress(host, port))
-                    channel = socketChannel
+                    val socketChannel = connection.channel
                     remoteToTunJob = scope.launch(Dispatchers.IO) {
                         val buffer = ByteArray(32768)
                         val socket = socketChannel.socket().getInputStream()
@@ -212,10 +242,10 @@ class UserSpacePacketForwarder(
                             val read = socket.read(buffer)
                             if (read <= 0) break
                             val responsePacket = TcpResponseBuilder.build(
-                                sourceIp = key.destinationIp,
-                                sourcePort = key.destinationPort,
-                                destinationIp = key.sourceIp,
-                                destinationPort = key.sourcePort,
+                                sourceIp = connection.key.destinationIp,
+                                sourcePort = connection.key.destinationPort,
+                                destinationIp = connection.key.sourceIp,
+                                destinationPort = connection.key.sourcePort,
                                 payload = buffer,
                                 payloadLength = read
                             )
@@ -231,7 +261,7 @@ class UserSpacePacketForwarder(
         fun sendToRemote(packet: ByteArray, length: Int) {
             scope.launch(Dispatchers.IO) {
                 try {
-                    val socketChannel = channel ?: return@launch
+                    val socketChannel = connection.channel
                     val segments = TcpDesyncPipeline.prepareOutbound(
                         packet = packet,
                         length = length,
@@ -259,8 +289,7 @@ class UserSpacePacketForwarder(
 
         fun close() {
             remoteToTunJob?.cancel()
-            runCatching { channel?.close() }
-            channel = null
+            runCatching { connection.channel.close() }
             onClosed()
         }
     }
