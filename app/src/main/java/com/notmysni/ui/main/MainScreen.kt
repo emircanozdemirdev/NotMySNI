@@ -1,7 +1,6 @@
 package com.notmysni.ui.main
 
 import android.app.Activity
-import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -17,52 +16,25 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.notmysni.vpn.LocalVpnService
-import kotlinx.coroutines.delay
-
-private enum class ConnectionStatus {
-    Disconnected,
-    Connecting,
-    Connected
-}
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.notmysni.vpn.VpnState
 
 @Composable
-fun MainScreen(activeSniHost: String) {
-    val context = LocalContext.current
-
-    var vpnEnabled by remember { mutableStateOf(false) }
-    var connectionStatus by remember { mutableStateOf(ConnectionStatus.Disconnected) }
+fun MainScreen(
+    activeSniHost: String,
+    viewModel: MainViewModel = hiltViewModel()
+) {
+    val vpnState by viewModel.vpnState.collectAsState()
 
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            ContextCompat.startForegroundService(
-                context,
-                LocalVpnService.buildStartIntent(context)
-            )
-            vpnEnabled = true
-        }
-    }
-
-    LaunchedEffect(vpnEnabled) {
-        if (vpnEnabled) {
-            connectionStatus = ConnectionStatus.Connecting
-            delay(900)
-            connectionStatus = ConnectionStatus.Connected
-        } else {
-            connectionStatus = ConnectionStatus.Disconnected
-        }
+        viewModel.onVpnPermissionResult(result.resultCode == Activity.RESULT_OK)
     }
 
     Column(
@@ -91,31 +63,27 @@ fun MainScreen(activeSniHost: String) {
                 Spacer(modifier = Modifier.height(8.dp))
                 AssistChip(
                     onClick = {},
-                    label = { Text(text = connectionStatus.name) }
+                    label = { Text(text = vpnState.toStatusLabel()) }
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = {
-                        if (vpnEnabled) {
-                            context.startService(LocalVpnService.buildStopIntent(context))
-                            vpnEnabled = false
+                        if (vpnState == VpnState.Connected || vpnState == VpnState.Connecting) {
+                            viewModel.stopVpn()
                         } else {
-                            val prepareIntent = VpnService.prepare(context)
-                            if (prepareIntent != null) {
-                                vpnPermissionLauncher.launch(prepareIntent)
-                            } else {
-                                ContextCompat.startForegroundService(
-                                    context,
-                                    LocalVpnService.buildStartIntent(context)
-                                )
-                                vpnEnabled = true
-                            }
+                            viewModel.requestVpnPermissionOrStart(vpnPermissionLauncher::launch)
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(text = if (vpnEnabled) "Stop VPN" else "Start VPN")
+                    Text(
+                        text = if (vpnState == VpnState.Connected || vpnState == VpnState.Connecting) {
+                            "Stop VPN"
+                        } else {
+                            "Start VPN"
+                        }
+                    )
                 }
             }
         }
@@ -138,4 +106,12 @@ fun MainScreen(activeSniHost: String) {
             }
         }
     }
+}
+
+private fun VpnState.toStatusLabel(): String = when (this) {
+    VpnState.Disconnected -> "Disconnected"
+    VpnState.PermissionRequired -> "Permission Required"
+    VpnState.Connecting -> "Connecting"
+    VpnState.Connected -> "Connected"
+    is VpnState.Error -> "Error"
 }

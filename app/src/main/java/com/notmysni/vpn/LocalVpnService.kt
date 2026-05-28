@@ -17,6 +17,8 @@ import com.notmysni.R
 import com.notmysni.dns.DohResolver
 import com.notmysni.engine.EngineSettingsHolder
 import com.notmysni.engine.forward.UserSpacePacketForwarder
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,7 +26,11 @@ import kotlinx.coroutines.cancel
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
+@AndroidEntryPoint
 class LocalVpnService : VpnService() {
+
+    @Inject
+    lateinit var vpnStateManager: VpnStateManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var packetForwarder: UserSpacePacketForwarder? = null
@@ -46,12 +52,14 @@ class LocalVpnService : VpnService() {
 
     override fun onDestroy() {
         stopPacketLoop()
+        vpnStateManager.setState(VpnState.Disconnected)
         serviceScope.cancel()
         super.onDestroy()
     }
 
     private fun startVpnTunnel() {
         if (tunInterface != null) return
+        vpnStateManager.setState(VpnState.Connecting)
 
         val connectingNotification = buildNotification(
             getString(R.string.vpn_notification_connecting)
@@ -70,6 +78,7 @@ class LocalVpnService : VpnService() {
         }
 
         if (pfd == null) {
+            vpnStateManager.setState(VpnState.Error("Failed to establish VPN tunnel"))
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
@@ -79,6 +88,7 @@ class LocalVpnService : VpnService() {
         startPacketLoop(pfd)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(getString(R.string.vpn_notification_connected)))
+        vpnStateManager.setState(VpnState.Connected)
     }
 
     private fun startPacketLoop(pfd: ParcelFileDescriptor) {
@@ -112,6 +122,7 @@ class LocalVpnService : VpnService() {
 
     private fun stopVpnTunnel() {
         stopPacketLoop()
+        vpnStateManager.setState(VpnState.Disconnected)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
