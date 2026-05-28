@@ -28,11 +28,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.notmysni.data.SettingsPreferences
 import com.notmysni.dns.DohProvider
-import com.notmysni.engine.DpiEngineConfig
-import com.notmysni.engine.EngineSettingsHolder
 import com.notmysni.engine.fragment.FragmentStrategy
-import com.notmysni.engine.fragment.TtlDesyncConfig
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -45,28 +43,44 @@ private enum class FragmentStrategyOption(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    settings: SettingsPreferences,
+    onSettingsChange: (SettingsPreferences) -> Unit,
+    modifier: Modifier = Modifier
+) {
     var dohProviderIndex by rememberSaveable {
-        mutableStateOf(EngineSettingsHolder.config.dohProvider.ordinal)
+        mutableStateOf(settings.dohProvider.ordinal)
     }
     val dohProvider = DohProvider.entries[dohProviderIndex.coerceIn(0, DohProvider.entries.lastIndex)]
     var dohMenuExpanded by remember { mutableStateOf(false) }
 
-    var fragmentStrategyIndex by rememberSaveable { mutableStateOf(0) }
+    var fragmentStrategyIndex by rememberSaveable {
+        mutableStateOf(settings.fragmentStrategy.toOption().ordinal)
+    }
     val fragmentStrategy =
         FragmentStrategyOption.entries[fragmentStrategyIndex.coerceIn(0, FragmentStrategyOption.entries.lastIndex)]
 
-    var verboseLogsEnabled by rememberSaveable { mutableStateOf(false) }
+    var verboseLogsEnabled by rememberSaveable { mutableStateOf(settings.verboseLogsEnabled) }
 
     var ttlDesyncEnabled by rememberSaveable {
-        mutableStateOf(EngineSettingsHolder.config.ttlDesync.enabled)
+        mutableStateOf(settings.ttlDesyncEnabled)
     }
 
-    LaunchedEffect(dohProviderIndex, fragmentStrategyIndex, ttlDesyncEnabled) {
-        EngineSettingsHolder.config = DpiEngineConfig(
-            dohProvider = dohProvider,
-            fragmentStrategy = fragmentStrategy.toEngineStrategy(),
-            ttlDesync = TtlDesyncConfig(enabled = ttlDesyncEnabled)
+    LaunchedEffect(settings) {
+        dohProviderIndex = settings.dohProvider.ordinal
+        fragmentStrategyIndex = settings.fragmentStrategy.toOption().ordinal
+        ttlDesyncEnabled = settings.ttlDesyncEnabled
+        verboseLogsEnabled = settings.verboseLogsEnabled
+    }
+
+    LaunchedEffect(dohProviderIndex, fragmentStrategyIndex, ttlDesyncEnabled, verboseLogsEnabled) {
+        onSettingsChange(
+            SettingsPreferences(
+                dohProvider = dohProvider,
+                fragmentStrategy = fragmentStrategy.toEngineStrategy(),
+                ttlDesyncEnabled = ttlDesyncEnabled,
+                verboseLogsEnabled = verboseLogsEnabled
+            )
         )
     }
 
@@ -215,6 +229,12 @@ private fun FragmentStrategyOption.toEngineStrategy(): FragmentStrategy = when (
     FragmentStrategyOption.SPLIT_AT_SNI -> FragmentStrategy.SplitAtSni
     FragmentStrategyOption.TINY_FIRST -> FragmentStrategy.TinyFirst()
     FragmentStrategyOption.MULTI_SPLIT -> FragmentStrategy.MultiSplit(chunkCount = 4)
+}
+
+private fun FragmentStrategy.toOption(): FragmentStrategyOption = when (this) {
+    FragmentStrategy.SplitAtSni -> FragmentStrategyOption.SPLIT_AT_SNI
+    is FragmentStrategy.TinyFirst -> FragmentStrategyOption.TINY_FIRST
+    is FragmentStrategy.MultiSplit -> FragmentStrategyOption.MULTI_SPLIT
 }
 
 private fun DohProvider.toLabel(): String = when (this) {

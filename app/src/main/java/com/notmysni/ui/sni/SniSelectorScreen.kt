@@ -57,6 +57,7 @@ private fun isValidHostname(value: String): Boolean =
 @Composable
 fun SniSelectorScreen(
     selectedHostname: String,
+    customHosts: Set<String>,
     onSelectedHostnameChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -87,7 +88,9 @@ fun SniSelectorScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.weight(1f)
         ) {
-            items(PRESET_SNI_HOSTS, key = { it }) { host ->
+            val allHosts = (PRESET_SNI_HOSTS + customHosts.toList().sorted())
+                .distinct()
+            items(allHosts, key = { it }) { host ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

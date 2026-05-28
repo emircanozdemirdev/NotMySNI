@@ -6,11 +6,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.notmysni.ui.main.MainScreen
 import com.notmysni.ui.settings.SettingsScreen
 import com.notmysni.ui.sni.SniSelectorScreen
@@ -23,10 +22,13 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 
 @Composable
 fun NotMySniApp() {
+    val viewModel: NotMySniViewModel = hiltViewModel()
+    val sniState by viewModel.sniState.collectAsState()
+    val settingsState by viewModel.settingsState.collectAsState()
+
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
-    var selectedHostname by remember { mutableStateOf("v.whatsapp.net") }
 
     Scaffold(
         bottomBar = {
@@ -60,16 +62,20 @@ fun NotMySniApp() {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(AppDestination.Home.route) {
-                MainScreen(activeSniHost = selectedHostname)
+                MainScreen(activeSniHost = sniState.selectedHostname)
             }
             composable(AppDestination.Sni.route) {
                 SniSelectorScreen(
-                    selectedHostname = selectedHostname,
-                    onSelectedHostnameChange = { selectedHostname = it }
+                    selectedHostname = sniState.selectedHostname,
+                    customHosts = sniState.customHosts,
+                    onSelectedHostnameChange = viewModel::onSelectedHostnameChange
                 )
             }
             composable(AppDestination.Settings.route) {
-                SettingsScreen()
+                SettingsScreen(
+                    settings = settingsState,
+                    onSettingsChange = viewModel::onSettingsChange
+                )
             }
         }
     }
