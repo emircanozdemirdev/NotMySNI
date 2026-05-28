@@ -1,16 +1,23 @@
 package com.notmysni.engine.forward
 
+import com.notmysni.dns.DohResolver
+import com.notmysni.engine.DpiEngineConfig
+import com.notmysni.engine.fragment.TcpDesyncPipeline
 import com.notmysni.engine.parser.IpHeaderParser
 import com.notmysni.engine.parser.TcpHeaderParser
 import com.notmysni.model.IpHeader
 import com.notmysni.model.TransportProtocol
 import com.notmysni.vpn.TunOutput
 import com.notmysni.vpn.VpnProtector
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetSocketAddress
@@ -18,17 +25,31 @@ import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reads IPv4 packets from TUN, forwards TCP/UDP via protected sockets, writes replies to TUN.
  * Full routing and DPI logic will extend this in later phases.
+ *
+ * Step 6.2 — TTL-based desync technique
  */
 class UserSpacePacketForwarder(
     private val scope: CoroutineScope,
     private val protector: VpnProtector,
-    private val mtu: Int
+    private val mtu: Int,
+    private val dpiEngineConfig: DpiEngineConfig = DpiEngineConfig.Default,
+    @Suppress("unused") private val dohResolver: DohResolver? = null
 ) {
-    private val tcpConnections = ConcurrentHashMap<ConnectionKey, TcpSession>()
+    // Step 6.2 — TTL-based desync technique
+    //
+    // private fun sendWholePacketWithLowTtl(packet: ByteArray, length: Int, tunOut: TunOutput) {
+    //     val copy = packet.copyOf(length)
+    //     copy[8] = 1
+    //     tunOut.write(copy, length)
+    // }
+
+    private val connectionTable = ConnectionTable()
+    private val tcpSessions = ConcurrentHashMap<ConnectionKey, TcpSession>()
     private val udpChannels = ConcurrentHashMap<ConnectionKey, DatagramChannel>()
 
     private var readJob: Job? = null
@@ -52,8 +73,12 @@ class UserSpacePacketForwarder(
     fun stop() {
         readJob?.cancel()
         readJob = null
-        tcpConnections.values.forEach { it.close() }
-        tcpConnections.clear()
+        tcpSessions.values.forEach { it.close() }
+        tcpSessions.clear()
+        connectionTable.values().forEach { conn ->
+            runCatching { conn.channel.close() }
+        }
+        connectionTable.clear()
         udpChannels.values.forEach { channel ->
             runCatching { channel.close() }
         }
@@ -86,31 +111,33 @@ class UserSpacePacketForwarder(
         )
 
         if (tcpHeader.flags.fin || tcpHeader.flags.rst) {
-            tcpConnections.remove(key)?.close()
+            tcpSessions.remove(key)?.close(sendFinToRemote = tcpHeader.flags.fin)
+            connectionTable.remove(key)?.let { runCatching { it.channel.close() } }
             return
         }
 
-        var session = tcpConnections[key]
+        var session = tcpSessions[key]
         if (session == null) {
             if (!tcpHeader.flags.syn) return
+            val destinationHost = ipHeader.destinationAddress.toDisplayString()
+            val connection = createConnection(key, destinationHost, tcpHeader.destinationPort) ?: return
             session = TcpSession(
                 scope = scope,
-                protector = protector,
-                key = key,
+                connection = connection,
                 tunOut = tunOut,
-                onClosed = { tcpConnections.remove(key) }
+                onClosed = {
+                    tcpSessions.remove(key)
+                    connectionTable.remove(key)?.let { runCatching { it.channel.close() } }
+                }
             ).also { newSession ->
-                tcpConnections[key] = newSession
-                newSession.connect(
-                    ipHeader.destinationAddress.toDisplayString(),
-                    tcpHeader.destinationPort
-                )
+                tcpSessions[key] = newSession
+                newSession.startRemoteToTun()
             }
         }
 
         val payloadLength = tcpHeader.payloadLength(length)
         if (payloadLength > 0) {
-            session.sendToRemote(packet, tcpHeader.payloadOffset, payloadLength)
+            session.enqueueToRemote(packet, length)
         }
     }
 
@@ -172,62 +199,128 @@ class UserSpacePacketForwarder(
     private fun readUInt16(packet: ByteArray, offset: Int): Int =
         ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
 
-    private class TcpSession(
+    private fun createConnection(
+        key: ConnectionKey,
+        destinationHost: String,
+        destinationPort: Int
+    ): TcpConnection? {
+        return try {
+            val channel = SocketChannel.open()
+            protector.protect(channel)
+            channel.configureBlocking(true)
+            channel.connect(InetSocketAddress(destinationHost, destinationPort))
+
+            val newConnection = TcpConnection(
+                key = key,
+                destinationHost = destinationHost,
+                destinationPort = destinationPort,
+                channel = channel
+            )
+            val existing = connectionTable.putIfAbsent(newConnection)
+            if (existing != null) {
+                runCatching { channel.close() }
+                existing
+            } else {
+                newConnection
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private inner class TcpSession(
         private val scope: CoroutineScope,
-        private val protector: VpnProtector,
-        private val key: ConnectionKey,
+        private val connection: TcpConnection,
         private val tunOut: TunOutput,
         private val onClosed: () -> Unit
     ) {
-        private var channel: SocketChannel? = null
+        private val closed = AtomicBoolean(false)
+        private val outboundQueue = Channel<OutboundTcpWrite>(capacity = Channel.UNLIMITED)
+        private val sessionScope = CoroutineScope(
+            scope.coroutineContext +
+                SupervisorJob() +
+                Dispatchers.IO +
+                CoroutineExceptionHandler { _, _ -> close() }
+        )
         private var remoteToTunJob: Job? = null
+        private var tunToRemoteJob: Job? = null
 
-        fun connect(host: String, port: Int) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val socketChannel = SocketChannel.open()
-                    protector.protect(socketChannel)
-                    socketChannel.configureBlocking(true)
-                    socketChannel.connect(InetSocketAddress(host, port))
-                    channel = socketChannel
-                    remoteToTunJob = scope.launch(Dispatchers.IO) {
-                        val buffer = ByteArray(32768)
-                        val socket = socketChannel.socket().getInputStream()
-                        while (isActive) {
-                            val read = socket.read(buffer)
-                            if (read <= 0) break
-                            val responsePacket = TcpResponseBuilder.build(
-                                sourceIp = key.destinationIp,
-                                sourcePort = key.destinationPort,
-                                destinationIp = key.sourceIp,
-                                destinationPort = key.sourcePort,
-                                payload = buffer,
-                                payloadLength = read
-                            )
-                            tunOut.write(responsePacket, responsePacket.size)
-                        }
+        fun startRemoteToTun() {
+            val socketChannel = connection.channel
+
+            remoteToTunJob = sessionScope.launch {
+                val buffer = ByteArray(32768)
+                val socket = socketChannel.socket().getInputStream()
+                while (isActive) {
+                    val read = socket.read(buffer)
+                    if (read <= 0) break
+                    val responsePacket = TcpResponseBuilder.build(
+                        sourceIp = connection.key.destinationIp,
+                        sourcePort = connection.key.destinationPort,
+                        destinationIp = connection.key.sourceIp,
+                        destinationPort = connection.key.sourcePort,
+                        payload = buffer,
+                        payloadLength = read
+                    )
+                    tunOut.write(responsePacket, responsePacket.size)
+                }
+                close()
+            }
+
+            tunToRemoteJob = sessionScope.launch {
+                val ttlConfig = dpiEngineConfig.ttlDesync
+                for (outbound in outboundQueue) {
+                    outbound.decoyPayload?.let { decoy ->
+                        IpTtl.setSocketTtl(socketChannel.socket(), ttlConfig.fakeSegmentTtl)
+                        socketChannel.write(ByteBuffer.wrap(decoy))
                     }
-                } catch (_: Exception) {
-                    close()
+
+                    IpTtl.setSocketTtl(socketChannel.socket(), ttlConfig.realSegmentTtl)
+                    for (payload in outbound.payloads) {
+                        socketChannel.write(ByteBuffer.wrap(payload))
+                    }
                 }
             }
         }
 
-        fun sendToRemote(packet: ByteArray, offset: Int, length: Int) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    channel?.write(ByteBuffer.wrap(packet, offset, length))
-                } catch (_: Exception) {
-                    close()
-                }
+        fun enqueueToRemote(packet: ByteArray, length: Int) {
+            if (closed.get()) return
+
+            val segments = TcpDesyncPipeline.prepareOutbound(
+                packet = packet,
+                length = length,
+                fragmentStrategy = dpiEngineConfig.fragmentStrategy,
+                ttlConfig = dpiEngineConfig.ttlDesync
+            ) ?: return
+
+            val queued = outboundQueue.trySend(
+                OutboundTcpWrite(
+                    decoyPayload = segments.decoyPayload,
+                    payloads = segments.payloadsForRemote
+                )
+            )
+            if (queued.isFailure) {
+                close()
             }
         }
 
-        fun close() {
+        fun close(sendFinToRemote: Boolean = false) {
+            if (!closed.compareAndSet(false, true)) return
+
+            if (sendFinToRemote) {
+                runCatching { connection.channel.socket().shutdownOutput() }
+            }
+            outboundQueue.close()
+            tunToRemoteJob?.cancel()
             remoteToTunJob?.cancel()
-            runCatching { channel?.close() }
-            channel = null
+            sessionScope.cancel()
+            runCatching { connection.channel.close() }
             onClosed()
         }
     }
+
+    private data class OutboundTcpWrite(
+        val decoyPayload: ByteArray?,
+        val payloads: List<ByteArray>
+    )
 }

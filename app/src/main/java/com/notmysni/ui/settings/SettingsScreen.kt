@@ -10,9 +10,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -22,19 +22,20 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.notmysni.dns.DohProvider
+import com.notmysni.engine.DpiEngineConfig
+import com.notmysni.engine.EngineSettingsHolder
+import com.notmysni.engine.fragment.FragmentStrategy
+import com.notmysni.engine.fragment.TtlDesyncConfig
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-
-private enum class DohProvider(val label: String) {
-    CLOUDFLARE("Cloudflare"),
-    GOOGLE("Google")
-}
 
 private enum class FragmentStrategyOption(val label: String) {
     SPLIT_AT_SNI("Split at SNI"),
@@ -45,7 +46,9 @@ private enum class FragmentStrategyOption(val label: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
-    var dohProviderIndex by rememberSaveable { mutableStateOf(0) }
+    var dohProviderIndex by rememberSaveable {
+        mutableStateOf(EngineSettingsHolder.config.dohProvider.ordinal)
+    }
     val dohProvider = DohProvider.entries[dohProviderIndex.coerceIn(0, DohProvider.entries.lastIndex)]
     var dohMenuExpanded by remember { mutableStateOf(false) }
 
@@ -54,6 +57,18 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         FragmentStrategyOption.entries[fragmentStrategyIndex.coerceIn(0, FragmentStrategyOption.entries.lastIndex)]
 
     var verboseLogsEnabled by rememberSaveable { mutableStateOf(false) }
+
+    var ttlDesyncEnabled by rememberSaveable {
+        mutableStateOf(EngineSettingsHolder.config.ttlDesync.enabled)
+    }
+
+    LaunchedEffect(dohProviderIndex, fragmentStrategyIndex, ttlDesyncEnabled) {
+        EngineSettingsHolder.config = DpiEngineConfig(
+            dohProvider = dohProvider,
+            fragmentStrategy = fragmentStrategy.toEngineStrategy(),
+            ttlDesync = TtlDesyncConfig(enabled = ttlDesyncEnabled)
+        )
+    }
 
     Column(
         modifier = modifier
@@ -83,19 +98,19 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     .fillMaxWidth()
                     .menuAnchor(),
                 readOnly = true,
-                value = dohProvider.label,
+                value = dohProvider.toLabel(),
                 onValueChange = {},
                 label = { Text("DoH provider") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dohMenuExpanded) },
                 colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
             )
-            ExposedDropdownMenu(
+            DropdownMenu(
                 expanded = dohMenuExpanded,
                 onDismissRequest = { dohMenuExpanded = false }
             ) {
                 DohProvider.entries.forEach { provider ->
                     DropdownMenuItem(
-                        text = { Text(provider.label) },
+                        text = { Text(provider.toLabel()) },
                         onClick = {
                             dohProviderIndex = provider.ordinal
                             dohMenuExpanded = false
@@ -139,6 +154,38 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         HorizontalDivider()
         Spacer(modifier = Modifier.height(24.dp))
 
+        Text(
+            text = "TTL desync",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "TTL-based desync",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Low-TTL decoy on the first fragment, then real segments",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = ttlDesyncEnabled,
+                onCheckedChange = { ttlDesyncEnabled = it }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(24.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -162,4 +209,15 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+private fun FragmentStrategyOption.toEngineStrategy(): FragmentStrategy = when (this) {
+    FragmentStrategyOption.SPLIT_AT_SNI -> FragmentStrategy.SplitAtSni
+    FragmentStrategyOption.TINY_FIRST -> FragmentStrategy.TinyFirst()
+    FragmentStrategyOption.MULTI_SPLIT -> FragmentStrategy.MultiSplit(chunkCount = 4)
+}
+
+private fun DohProvider.toLabel(): String = when (this) {
+    DohProvider.CLOUDFLARE -> "Cloudflare"
+    DohProvider.GOOGLE -> "Google"
 }
